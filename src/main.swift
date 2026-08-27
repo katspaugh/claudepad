@@ -4,10 +4,9 @@
 // Only the 8x8 grid is used (no top-row or scene buttons). Columns = sessions:
 //   row 8    session pad, colored by status (orange pulse working / yellow flash
 //            waiting / cyan pulse monitoring / green idle) — press to focus
-//   rows 7-4 subagents (pulse cyan running, dim blue done) — press to open
-//   row 3    effort pad (effort color) — press cycles effort, applied after a debounce
-//   row 2    model pad (model color) — press cycles model, applied after a debounce
-//   row 1    unlit — press to focus
+//   rows 7-3 running subagents (pulse cyan), compacted — press to attach
+//   row 2    effort pad (effort color) — press cycles effort, applied after a debounce
+//   row 1    model pad (model color) — press cycles model, applied after a debounce
 // Pressing a pad in an empty column scrolls the 5h/7d usage summary.
 //
 // Zero dependencies: CoreMIDI + osascript. Build with build.sh.
@@ -501,35 +500,33 @@ final class App {
             // flash yellow = waiting, pulse cyan = monitoring, green = idle).
             f[80 + col] = statusLight(s)
 
-            // Rows 7..4: running subagents, newest at the top, compacted —
+            // Rows 7..3: running subagents, newest at the top, compacted —
             // a finished agent frees its slot and the rest shift immediately.
             let running = (s.agents ?? []).filter { $0.status == "running" }
             var row = 7
-            for _ in running.suffix(4) {
-                guard row >= 4 else { break }
+            for _ in running.suffix(5) {
+                guard row >= 3 else { break }
                 f[row * 10 + col] = .pulse(COLOR_CYAN)
                 row -= 1
             }
 
-            // Row 3: effort. Pending selection pulses; settled value sits dim.
+            // Row 2: effort. Pending selection pulses; settled value sits dim.
             if let p = pendingEffort[col], p.idx < config.efforts.count {
-                f[30 + col] = .pulse(config.efforts[p.idx].color)
+                f[20 + col] = .pulse(config.efforts[p.idx].color)
             } else if let i = displayedEffortIndex(s) {
-                f[30 + col] = .solid(dim(config.efforts[i].color))
-            } else {
-                f[30 + col] = .solid(dim(COLOR_WHITE))
-            }
-
-            // Row 2: model.
-            if let p = pendingModel[col], p.idx < config.models.count {
-                f[20 + col] = .pulse(config.models[p.idx].color)
-            } else if let i = displayedModelIndex(s) {
-                f[20 + col] = .solid(dim(config.models[i].color))
+                f[20 + col] = .solid(dim(config.efforts[i].color))
             } else {
                 f[20 + col] = .solid(dim(COLOR_WHITE))
             }
 
-            // Row 1: unlit (still focuses the session when pressed).
+            // Row 1: model.
+            if let p = pendingModel[col], p.idx < config.models.count {
+                f[10 + col] = .pulse(config.models[p.idx].color)
+            } else if let i = displayedModelIndex(s) {
+                f[10 + col] = .solid(dim(config.models[i].color))
+            } else {
+                f[10 + col] = .solid(dim(COLOR_WHITE))
+            }
         }
         return f
     }
@@ -620,19 +617,19 @@ final class App {
         }
 
         switch row {
-        case 2:
+        case 1:
             guard !config.models.isEmpty else { return }
             let cur = pendingModel[col]?.idx ?? displayedModelIndex(s) ?? -1
             pendingModel[col] = Pending(idx: (cur + 1) % config.models.count,
                                         deadline: Date().addingTimeInterval(settle))
             render()
-        case 3:
+        case 2:
             guard !config.efforts.isEmpty else { return }
             let cur = pendingEffort[col]?.idx ?? displayedEffortIndex(s) ?? -1
             pendingEffort[col] = Pending(idx: (cur + 1) % config.efforts.count,
                                          deadline: Date().addingTimeInterval(settle))
             render()
-        case 4...7:
+        case 3...7:
             guard let cwd = s.cwd else { return }
             let nd = needle(for: s)
             ghostty.focus(cwd: cwd, needle: nd)
@@ -643,7 +640,7 @@ final class App {
             // the second opens the view (documented behavior).
             // Agent view rows: main first, then agents in spawn order.
             let running = (s.agents ?? []).filter { $0.status == "running" }
-            let shown = min(running.count, 4)
+            let shown = min(running.count, 5)
             let slot = 7 - row
             guard slot < shown else { return }  // empty pad: focus only
             let chrono = running.count - 1 - slot  // newest renders at row 7

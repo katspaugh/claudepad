@@ -9,14 +9,13 @@ Zero dependencies: a single Swift daemon (CoreMIDI + AppleScript) fed by Claude 
  row 8  │ ⬤ ││ ⬤ ││ ⬤ ││    ││    ││    ││    ││    │  session/status pads
         ├────┤├────┤├────┤├────┤├────┤├────┤├────┤├────┤
  row 7  │ a1 ││    ││ a1 │                               subagents
- row 6  │ a2 ││    ││    │                               (up to 4,
+ row 6  │ a2 ││    ││    │                               (up to 5,
  row 5  │    ││    ││    │                                newest on top)
  row 4  │    ││    ││    │
+ row 3  │    ││    ││    │
         ├────┤├────┤├────┤
- row 3  │ E  ││ E  ││ E  │                               effort pads
- row 2  │ M  ││ M  ││ M  │                               model pads
-        ├────┤├────┤├────┤├────┤├────┤├────┤├────┤├────┤
- row 1  │    ││    ││    ││    ││    ││    ││    ││    │  (dark; press = focus)
+ row 2  │ E  ││ E  ││ E  │                               effort pads
+ row 1  │ M  ││ M  ││ M  │                               model pads
         └────┘└────┘└────┘└────┘└────┘└────┘└────┘└────┘
                      columns = sessions
 ```
@@ -30,19 +29,18 @@ Columns are sessions, ordered by start time; a column keeps its position while t
   - 🟡 flashing yellow — waiting for your input / permission
   - 🔵 pulsing cyan — "monitoring": turn idle but subagents still running
   - 🟢 solid green — idle / done
-- **Rows 7–4 — running subagents**, newest at the top, pulsing cyan. The stack stays compact: when an agent finishes, its pad frees and the others shift immediately.
-- **Row 3 — effort pad**, colored by current effort: max red → xhigh orange → high yellow → medium green → low blue.
-- **Row 2 — model pad**, colored by current model: Fable white, Opus purple, Sonnet blue, Haiku green.
-- **Row 1 — dark**, but pressing it still focuses the session.
+- **Rows 7–3 — running subagents**, newest at the top, pulsing cyan. The stack stays compact: when an agent finishes, its pad frees and the others shift immediately.
+- **Row 2 — effort pad**, colored by current effort: max red → xhigh orange → high yellow → medium green → low blue.
+- **Row 1 — model pad**, colored by current model: Fable white, Opus purple, Sonnet blue, Haiku green.
 
 ## What it does
 
 | Press | Action |
 |---|---|
-| session / row-1 pad | focus that session's Ghostty window or tab |
+| session pad | focus that session's Ghostty window or tab |
 | subagent pad | focus the session, open the agent view (`←`), and attach to that agent (`↓`…`enter`) |
-| model pad (row 2) | cycle model — pad pulses through choices, applies **1.2s after your last tap** |
-| effort pad (row 3) | cycle effort, same debounce |
+| model pad (row 1) | cycle model — pad pulses through choices, applies **1.2s after your last tap** |
+| effort pad (row 2) | cycle effort, same debounce |
 | any pad in an empty column | scroll `5h X%  7d Y%` rate-limit usage across the grid |
 
 Applying a model/effort **pastes `/model …` or `/effort …` + Enter directly into that session's terminal in the background** via Ghostty's scripting API — no window is raised, focus stays where you are. The pad shows the new value immediately (optimistically); once the statusline next reports that session's true state, the pad snaps to it — so a rejected or failed change reverts the pad to the actual current model/effort.
