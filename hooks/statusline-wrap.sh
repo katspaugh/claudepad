@@ -21,6 +21,12 @@ if command -v jq >/dev/null 2>&1; then
         p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' '); [ -z "$p" ] && p=1
         i=$((i + 1))
       done
+      # Headless = hosted by the background daemon (bg-spare worker, or parent
+      # is a bg-pty-host): no terminal to focus, hidden by the daemon.
+      headless=0
+      case "$(ps -o command= -p "$p" 2>/dev/null)" in *bg-spare*) headless=1 ;; esac
+      pp=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+      case "$(ps -o command= -p "${pp:-1}" 2>/dev/null)" in *bg-pty-host*) headless=1 ;; esac
       # Same per-session lock as claudepad-hook.sh — unlocked read-modify-write
       # races with hooks and loses their updates.
       lock="$f.lock"; i=0
@@ -32,7 +38,7 @@ if command -v jq >/dev/null 2>&1; then
       done
       cur='{}'; [ -f "$f" ] && cur=$(cat "$f" 2>/dev/null); [ -z "$cur" ] && cur='{}'
       tmp="$f.tmp.$$"
-      jq -c --argjson now "$now" --argjson sl "$input" --arg pid "$p" '
+      jq -c --argjson now "$now" --argjson sl "$input" --arg pid "$p" --arg headless "$headless" '
         . + {
           session_id: ($sl.session_id),
           cwd: ($sl.cwd // $sl.workspace.current_dir // .cwd),
@@ -44,7 +50,8 @@ if command -v jq >/dev/null 2>&1; then
           usage_5h: ($sl.rate_limits.five_hour.used_percentage // .usage_5h),
           usage_7d: ($sl.rate_limits.seven_day.used_percentage // .usage_7d),
           last_seen: $now,
-          sl_seen: $now
+          sl_seen: $now,
+          headless: ($headless == "1")
         }
         | .pid //= ($pid | tonumber)
         | .status //= "idle" | .agents //= []

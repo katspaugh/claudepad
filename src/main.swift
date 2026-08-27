@@ -33,6 +33,9 @@ struct EffortChoice: Codable {
 struct Config: Codable {
     var models: [ModelChoice]
     var efforts: [EffortChoice]
+    /// Hide sessions hosted by the Claude Code background daemon (no terminal
+    /// window to focus). Default true.
+    var hideHeadless: Bool? = true
 
     static let defaultConfig = Config(
         models: [
@@ -77,6 +80,8 @@ struct SessionState: Codable {
     var sl_seen: Double?
     var started_at: Double?
     var agents: [AgentInfo]?
+    var headless: Bool?
+    var waiting_since: Double?
 }
 
 // MARK: - LED model
@@ -371,6 +376,9 @@ final class App {
     let optimisticBackstop: TimeInterval = 8
     struct Optimistic { var idx: Int; var appliedAt: Date; var expires: Date }
     var optimisticModel: [String: Optimistic] = [:]   // session_id -> value
+    /// Waiting pads acknowledged by a press: session_id -> the waiting event's
+    /// waiting_since. Stops the flash until a newer waiting event arrives.
+    var acknowledgedWaiting: [String: Double] = [:]
     var optimisticEffort: [String: Optimistic] = [:]
 
     init() {
@@ -439,10 +447,15 @@ final class App {
             // Quiet for 90s with a live pid: hide the column but keep the file,
             // so the session reappears if its heartbeat resumes.
             if age > 90 { continue }
+            // Daemon-hosted sessions have no terminal to focus; hide unless configured otherwise.
+            if (config.hideHeadless ?? true) && (s.headless ?? false) { continue }
             result.append(s)
         }
         result.sort { ($0.started_at ?? $0.last_seen ?? 0) < ($1.started_at ?? $1.last_seen ?? 0) }
         sessions = result
+        acknowledgedWaiting = acknowledgedWaiting.filter { id, seen in
+            result.contains { $0.session_id == id && $0.status == "waiting" && ($0.waiting_since ?? 0) == seen }
+        }
 
         // Stable column assignment: keep existing, new sessions take lowest free column.
         let liveIds = Set(sessions.map { $0.session_id })
@@ -483,7 +496,9 @@ final class App {
         let running = (s.agents ?? []).contains { $0.status == "running" }
         switch s.status ?? "idle" {
         case "working":  return .pulse(COLOR_ORANGE)
-        case "waiting":  return .flash(COLOR_YELLOW, 0)
+        case "waiting":
+            if let ack = acknowledgedWaiting[s.session_id], ack == (s.waiting_since ?? 0) { return .solid(COLOR_YELLOW) }
+            return .flash(COLOR_YELLOW, 0)
         default:         return running ? .pulse(COLOR_CYAN) : .solid(COLOR_GREEN)
         }
     }
@@ -647,6 +662,10 @@ final class App {
             let seq = ["left", "left"] + Array(repeating: "down", count: 1 + chrono) + ["enter"]
             ghostty.keys(cwd: cwd, needle: nd, sequence: seq)
         default:
+            if s.status == "waiting" {
+                acknowledgedWaiting[s.session_id] = s.waiting_since ?? 0
+                render()
+            }
             guard let cwd = s.cwd else { return }
             ghostty.focus(cwd: cwd, needle: needle(for: s))
         }

@@ -37,7 +37,7 @@ Columns are sessions, ordered by start time; a column keeps its position while t
 
 | Press | Action |
 |---|---|
-| session pad | focus that session's Ghostty window or tab |
+| session pad | focus that session's Ghostty window or tab; a flashing (waiting) pad goes solid yellow until the next waiting event |
 | subagent pad | focus the session, open the agent view (`←`), and attach to that agent (`↓`…`enter`) |
 | model pad (row 1) | cycle model — pad pulses through choices, applies **1.2s after your last tap** |
 | effort pad (row 2) | cycle effort, same debounce |
@@ -55,7 +55,8 @@ Model/effort lists, commands, and colors are editable in `~/.claude/claudepad/co
 2. **Statusline wrapper** (`hooks/statusline-wrap.sh`) tees the JSON Claude Code pipes to the statusline — model, effort, context %, rate limits — into the same state file, then runs your original `~/.claude/statusline-command.sh` untouched. `refreshInterval: 10` makes it a heartbeat.
 3. **Daemon** (`bin/claudepad`) polls the state dir 4×/s, diffs LED frames, and drives the pad over the `LPMiniMK3 MIDI` port in programmer mode. Unplug/replug is handled; on exit it clears the pad and returns it to Live mode.
 4. **Liveness**: a session column is removed when its recorded pid is dead, or when its statusline heartbeat stops for 90s (covers sessions hosted by the background daemon, whose recorded pid may be a long-lived worker). Note that a session closed in the terminal may legitimately live on as a background session — it stays on the board while it's really running.
-5. **Ghostty control** uses Ghostty's native AppleScript dictionary (`sdef /Applications/Ghostty.app`): terminals are matched by exact `working directory` (falling back to a title-substring match against the session's latest topic title from the transcript), then `focus` raises the window and `input text` / `send key "enter"` inject commands without focusing.
+5. **Headless sessions**: the hooks mark sessions hosted by the Claude Code background daemon (`claude bg-spare` workers, or sessions whose parent is a `bg-pty-host`) as `headless`; the daemon hides them since there is no terminal to focus. Set `"hideHeadless": false` in `config.json` to show them anyway.
+6. **Ghostty control** uses Ghostty's native AppleScript dictionary (`sdef /Applications/Ghostty.app`): terminals are matched by exact `working directory` (falling back to a title-substring match against the session's latest topic title from the transcript), then `focus` raises the window and `input text` / `send key "enter"` inject commands without focusing.
 
 ## Setup
 
@@ -87,4 +88,3 @@ build.sh / install.sh     build; optional LaunchAgent install
 - **Context-window meter**: e.g. brightness of the session pad, or a dedicated row.
 - **Hold-to-interrupt**: long-press a session pad to send Escape (interrupt the turn) — needs press/release timing, deliberately not bound to a tap.
 - **Idle animation** when no sessions are live.
-- Distinguish background-daemon sessions (no window to focus) — e.g. park them in the rightmost columns.

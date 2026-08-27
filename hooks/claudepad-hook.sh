@@ -30,6 +30,19 @@ find_claude_pid() {
   echo "$PPID"
 }
 
+# is_headless <pid> — 1 if the claude process is hosted by the background
+# daemon (an unclaimed "bg-spare" worker, or a session whose parent is a
+# bg-pty-host), i.e. there is no terminal window to focus.
+is_headless() {
+  local cmd pcmd ppid
+  cmd=$(ps -o command= -p "$1" 2>/dev/null)
+  case "$cmd" in *bg-spare*) echo 1; return ;; esac
+  ppid=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')
+  pcmd=$(ps -o command= -p "${ppid:-1}" 2>/dev/null)
+  case "$pcmd" in *bg-pty-host*) echo 1; return ;; esac
+  echo 0
+}
+
 # merge <jq-filter> [extra jq args...] — apply filter to state file under a
 # per-session lock (hooks for one session can fire concurrently; an unlocked
 # read-modify-write loses entries, e.g. a PostToolUse clobbering SubagentStart).
@@ -59,9 +72,10 @@ case "$evt" in
     cwd=$(jq -r '.cwd // empty' <<<"$input")
     tp=$(jq -r '.transcript_path // empty' <<<"$input")
     pid=$(find_claude_pid)
-    merge '. + {session_id: $sid, cwd: $cwd, transcript_path: $tp, pid: ($pid | tonumber), status: "idle", last_seen: $now}
+    headless=$(is_headless "$pid")
+    merge '. + {session_id: $sid, cwd: $cwd, transcript_path: $tp, pid: ($pid | tonumber), headless: ($headless == "1"), status: "idle", last_seen: $now}
            | .agents //= [] | .started_at //= $now' \
-      --arg cwd "$cwd" --arg tp "$tp" --arg pid "$pid"
+      --arg cwd "$cwd" --arg tp "$tp" --arg pid "$pid" --arg headless "$headless"
     ;;
   UserPromptSubmit)
     merge '.status = "working" | .last_seen = $now
@@ -92,7 +106,7 @@ case "$evt" in
     ;;
   PermissionRequest|Notification)
     msg=$(jq -r '.message // ""' <<<"$input" | head -c 120)
-    merge '.status = "waiting" | .message = $msg | .last_seen = $now' --arg msg "$msg"
+    merge '.status = "waiting" | .message = $msg | .last_seen = $now | .waiting_since = $now' --arg msg "$msg"
     ;;
   Stop)
     merge '.status = "idle" | .last_seen = $now'
