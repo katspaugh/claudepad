@@ -40,7 +40,7 @@ Columns are sessions, ordered by start time; a column keeps its position while t
 | session pad | focus that session's Ghostty window or tab; a flashing (waiting) pad goes solid yellow until the next waiting event |
 | subagent pad | focus the session, open the agent view (`←`), and attach to that agent (`↓`…`enter`) |
 | model pad (row 1) | cycle model — pad pulses through choices, applies **1.2s after your last tap** |
-| effort pad (row 2) | cycle effort, same debounce |
+| effort pad (row 2) | step effort **up** (low → … → max, wraps to low), same debounce |
 | any pad in an empty column | scroll `5h X%  7d Y%` rate-limit usage across the grid |
 
 Applying a model/effort **pastes `/model …` or `/effort …` + Enter directly into that session's terminal in the background** via Ghostty's scripting API — no window is raised, focus stays where you are. The pad shows the new value immediately (optimistically); once the statusline next reports that session's true state, the pad snaps to it — so a rejected or failed change reverts the pad to the actual current model/effort.

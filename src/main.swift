@@ -640,8 +640,10 @@ final class App {
             render()
         case 2:
             guard !config.efforts.isEmpty else { return }
-            let cur = pendingEffort[col]?.idx ?? displayedEffortIndex(s) ?? -1
-            pendingEffort[col] = Pending(idx: (cur + 1) % config.efforts.count,
+            // Efforts are listed max→low; step toward max (wrap low after max).
+            let n = config.efforts.count
+            let cur = pendingEffort[col]?.idx ?? displayedEffortIndex(s) ?? 0
+            pendingEffort[col] = Pending(idx: (cur - 1 + n) % n,
                                          deadline: Date().addingTimeInterval(settle))
             render()
         case 3...7:
