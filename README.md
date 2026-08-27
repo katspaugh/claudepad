@@ -15,7 +15,7 @@ Zero dependencies: a single Swift daemon (CoreMIDI + AppleScript) fed by Claude 
  row 3  │    ││    ││    │
         ├────┤├────┤├────┤
  row 2  │ E  ││ E  ││ E  │                               effort pads
- row 1  │ M  ││ M  ││ M  │                               model pads
+ row 1  │ P  ││ P  ││ P  │                               preset pads
         └────┘└────┘└────┘└────┘└────┘└────┘└────┘└────┘
                      columns = sessions
 ```
@@ -31,7 +31,7 @@ Columns are sessions, ordered by start time; a column keeps its position while t
   - 🟢 solid green — idle / done
 - **Rows 7–3 — running subagents**, newest at the top, pulsing cyan. The stack stays compact: when an agent finishes, its pad frees and the others shift immediately.
 - **Row 2 — effort pad**, colored by current effort: max red → xhigh orange → high yellow → medium green → low blue.
-- **Row 1 — model pad**, colored by current model: Fable white, Opus purple, Sonnet blue, Haiku green.
+- **Row 1 — preset pad**, colored by the matching model+effort preset (default: Fable/high white, Opus/medium purple; dim white if the session matches no preset).
 
 ## What it does
 
@@ -39,7 +39,7 @@ Columns are sessions, ordered by start time; a column keeps its position while t
 |---|---|
 | session pad | focus that session's Ghostty window or tab; a flashing (waiting) pad goes solid yellow until the next waiting event |
 | subagent pad | focus the session, open the agent view (`←`), and attach to that agent (`↓`…`enter`) |
-| model pad (row 1) | cycle model — pad pulses through choices, applies **1.2s after your last tap** |
+| preset pad (row 1) | toggle to the next model+effort preset — pad pulses through choices, applies **1.2s after your last tap** (pastes `/model …` then `/effort …`) |
 | effort pad (row 2) | step effort **up** (low → … → max, wraps to low), same debounce |
 | any pad in an empty column | scroll `5h X%  7d Y%` rate-limit usage across the grid |
 
@@ -47,7 +47,7 @@ Applying a model/effort **pastes `/model …` or `/effort …` + Enter directly 
 
 > ⚠️ Model/effort presses inject into the session's composer. If that session had half-typed text, the command is appended to it. Treat those pads as "the session is at rest" controls.
 
-Model/effort lists, commands, and colors are editable in `~/.claude/claudepad/config.json` (Launchpad palette indices; hot-reloaded).
+Presets, model/effort lists, commands, and colors are editable in `~/.claude/claudepad/config.json` (Launchpad palette indices; hot-reloaded).
 
 ## How it works
 

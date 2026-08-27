@@ -6,7 +6,8 @@
 //            waiting / cyan pulse monitoring / green idle) — press to focus
 //   rows 7-3 running subagents (pulse cyan), compacted — press to attach
 //   row 2    effort pad (effort color) — press cycles effort, applied after a debounce
-//   row 1    model pad (model color) — press cycles model, applied after a debounce
+//   row 1    preset pad (preset color) — press toggles model+effort presets
+//            (default fable/high ↔ opus/medium), applied after a debounce
 // Pressing a pad in an empty column scrolls the 5h/7d usage summary.
 //
 // Zero dependencies: CoreMIDI + osascript. Build with build.sh.
@@ -30,9 +31,22 @@ struct EffortChoice: Codable {
     var color: UInt8
 }
 
+/// A model+effort pair toggled by the row-1 pad. `model`/`effort` reference
+/// ModelChoice/EffortChoice labels.
+struct Preset: Codable {
+    var label: String
+    var model: String
+    var effort: String
+    var color: UInt8
+}
+
 struct Config: Codable {
     var models: [ModelChoice]
     var efforts: [EffortChoice]
+    var presets: [Preset]? = [
+        Preset(label: "fable/high",  model: "fable", effort: "high",   color: 3),
+        Preset(label: "opus/medium", model: "opus",  effort: "medium", color: 49),
+    ]
     /// Hide sessions hosted by the Claude Code background daemon (no terminal
     /// window to focus). Default true.
     var hideHeadless: Bool? = true
@@ -297,6 +311,10 @@ final class Ghostty {
               input text cmdText to target
               delay 0.1
               send key "enter" to target
+              -- /model and /effort may open a picker preselecting the requested
+              -- value; a second Enter confirms it (harmless on an empty composer).
+              delay 0.6
+              send key "enter" to target
             end if
             return "ok"
           end tell
@@ -368,6 +386,7 @@ final class App {
     struct Pending { var idx: Int; var deadline: Date }
     let settle: TimeInterval = 1.2
     var pendingModel: [Int: Pending] = [:]     // column -> selection
+    var pendingPreset: [Int: Pending] = [:]    // column -> preset selection
     var pendingEffort: [Int: Pending] = [:]
 
     // After applying, show the new value until the statusline reports fresh
@@ -482,6 +501,21 @@ final class App {
         return config.efforts.firstIndex { name == $0.match || name.contains($0.match) }
     }
 
+    var presets: [Preset] { config.presets ?? Config.defaultConfig.presets ?? [] }
+
+    /// Model/effort choice indices a preset refers to (nil if a label is unknown).
+    func choices(for p: Preset) -> (model: Int, effort: Int)? {
+        guard let m = config.models.firstIndex(where: { $0.label == p.model }),
+              let e = config.efforts.firstIndex(where: { $0.label == p.effort }) else { return nil }
+        return (m, e)
+    }
+
+    /// The preset matching the session's displayed model+effort, if any.
+    func displayedPresetIndex(_ s: SessionState) -> Int? {
+        guard let m = displayedModelIndex(s), let e = displayedEffortIndex(s) else { return nil }
+        return presets.firstIndex { choices(for: $0).map { $0.model == m && $0.effort == e } ?? false }
+    }
+
     func displayedModelIndex(_ s: SessionState) -> Int? {
         if let o = optimisticModel[s.session_id], o.expires > Date() { return o.idx }
         return modelIndex(for: s)
@@ -534,11 +568,11 @@ final class App {
                 f[20 + col] = .solid(dim(COLOR_WHITE))
             }
 
-            // Row 1: model.
-            if let p = pendingModel[col], p.idx < config.models.count {
-                f[10 + col] = .pulse(config.models[p.idx].color)
-            } else if let i = displayedModelIndex(s) {
-                f[10 + col] = .solid(dim(config.models[i].color))
+            // Row 1: preset. Pending pulses; matched preset sits dim; no match = dim white.
+            if let p = pendingPreset[col], p.idx < presets.count {
+                f[10 + col] = .pulse(presets[p.idx].color)
+            } else if let i = displayedPresetIndex(s) {
+                f[10 + col] = .solid(dim(presets[i].color))
             } else {
                 f[10 + col] = .solid(dim(COLOR_WHITE))
             }
@@ -633,10 +667,10 @@ final class App {
 
         switch row {
         case 1:
-            guard !config.models.isEmpty else { return }
-            let cur = pendingModel[col]?.idx ?? displayedModelIndex(s) ?? -1
-            pendingModel[col] = Pending(idx: (cur + 1) % config.models.count,
-                                        deadline: Date().addingTimeInterval(settle))
+            guard !presets.isEmpty else { return }
+            let cur = pendingPreset[col]?.idx ?? displayedPresetIndex(s) ?? -1
+            pendingPreset[col] = Pending(idx: (cur + 1) % presets.count,
+                                         deadline: Date().addingTimeInterval(settle))
             render()
         case 2:
             guard !config.efforts.isEmpty else { return }
@@ -682,6 +716,17 @@ final class App {
                   p.idx < config.models.count else { continue }
             optimisticModel[s.session_id] = Optimistic(idx: p.idx, appliedAt: now, expires: now.addingTimeInterval(optimisticBackstop))
             ghostty.type(cwd: cwd, needle: needle(for: s), command: config.models[p.idx].command)
+        }
+        for (col, p) in pendingPreset where p.deadline <= now {
+            pendingPreset.removeValue(forKey: col)
+            guard let s = sessionAt(column: col), let cwd = s.cwd,
+                  p.idx < presets.count, let c = choices(for: presets[p.idx]) else { continue }
+            let exp = now.addingTimeInterval(optimisticBackstop)
+            optimisticModel[s.session_id] = Optimistic(idx: c.model, appliedAt: now, expires: exp)
+            optimisticEffort[s.session_id] = Optimistic(idx: c.effort, appliedAt: now, expires: exp)
+            // Serial queue: model lands first, then effort.
+            ghostty.type(cwd: cwd, needle: needle(for: s), command: config.models[c.model].command)
+            ghostty.type(cwd: cwd, needle: needle(for: s), command: config.efforts[c.effort].command)
         }
         for (col, p) in pendingEffort where p.deadline <= now {
             pendingEffort.removeValue(forKey: col)
