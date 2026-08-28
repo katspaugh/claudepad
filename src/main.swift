@@ -14,6 +14,7 @@
 
 import Foundation
 import CoreMIDI
+import AppKit
 
 // MARK: - Configuration
 
@@ -361,6 +362,81 @@ final class Ghostty {
     }
 }
 
+// MARK: - Menu bar
+
+/// Status item in the macOS menu bar. Mirrors what the pad already shows:
+/// whether the Launchpad is reachable, and whether any session wants input.
+/// Works from an unbundled binary — no .app wrapper needed.
+final class MenuBar: NSObject, NSMenuDelegate {
+    private let item = NSStatusItem.itemPlaceholder()
+    private let statusEntry = NSMenuItem(title: "Launchpad: …", action: nil, keyEquivalent: "")
+
+    /// Titles of sessions waiting on input. Read only when the menu opens —
+    /// resolving a title tails the transcript from disk, far too costly to do
+    /// on every 250ms tick.
+    var waitingTitles: () -> [String] = { [] }
+
+    private var connected = false
+    private var blinking = false
+
+    override init() {
+        super.init()
+        let menu = NSMenu()
+        menu.delegate = self
+        statusEntry.isEnabled = false
+        menu.addItem(statusEntry)
+        item.menu = menu
+        item.button?.image = MenuBar.icon(connected: false)
+        item.button?.imagePosition = .imageOnly
+    }
+
+    /// Grid glyph: filled when the pad is live, outlined when it is not.
+    private static func icon(connected: Bool) -> NSImage? {
+        let name = connected ? "square.grid.3x3.fill" : "square.grid.3x3"
+        let img = NSImage(systemSymbolName: name, accessibilityDescription: "claudepad")
+        img?.isTemplate = true
+        return img
+    }
+
+    /// Called every tick. `blinking` means at least one session is waiting on
+    /// input and has not been acknowledged.
+    func update(connected: Bool, blinking: Bool) {
+        if connected != self.connected {
+            self.connected = connected
+            item.button?.image = MenuBar.icon(connected: connected)
+        }
+        self.blinking = blinking
+        // Phase off the wall clock rather than a tick counter, so the cadence
+        // stays even (~2Hz) regardless of when ticks actually land.
+        let lit = !blinking || Int(Date().timeIntervalSince1970 * 2) % 2 == 0
+        item.button?.alphaValue = lit ? 1.0 : 0.25
+    }
+
+    // Rebuild on open so the waiting list is fresh and only costs a read when
+    // someone is actually looking at it.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        statusEntry.title = connected ? "Launchpad: connected" : "Launchpad: not connected"
+        while menu.numberOfItems > 1 { menu.removeItem(at: 1) }
+        let waiting = blinking ? waitingTitles() : []
+        guard !waiting.isEmpty else { return }
+        menu.addItem(.separator())
+        let header = NSMenuItem(title: "Waiting for input:", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        for title in waiting {
+            let entry = NSMenuItem(title: "  " + title, action: nil, keyEquivalent: "")
+            entry.isEnabled = false
+            menu.addItem(entry)
+        }
+    }
+}
+
+private extension NSStatusItem {
+    static func itemPlaceholder() -> NSStatusItem {
+        NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    }
+}
+
 // MARK: - App
 
 func log(_ msg: String) {
@@ -398,6 +474,7 @@ final class App {
     /// Waiting pads acknowledged by a press: session_id -> the waiting event's
     /// waiting_since. Stops the flash until a newer waiting event arrives.
     var acknowledgedWaiting: [String: Double] = [:]
+    let menuBar = MenuBar()
     var optimisticEffort: [String: Optimistic] = [:]
 
     init() {
@@ -418,6 +495,10 @@ final class App {
             self.render(force: true)
         }
         pad.onPress = { [weak self] idx in self?.handlePress(idx) }
+        menuBar.waitingTitles = { [weak self] in
+            guard let self else { return [] }
+            return self.sessions.filter { self.isUnacknowledgedWaiting($0) }.map { self.needle(for: $0) }
+        }
     }
 
     func writeDefaultConfigIfMissing() {
@@ -526,13 +607,21 @@ final class App {
         return effortIndex(for: s)
     }
 
+    /// A session waiting on input whose pad has not been acknowledged by a
+    /// press. Drives both the flashing pad and the blinking menu bar icon, so
+    /// the two always agree about what is asking for attention.
+    func isUnacknowledgedWaiting(_ s: SessionState) -> Bool {
+        guard (s.status ?? "") == "waiting" else { return false }
+        if let ack = acknowledgedWaiting[s.session_id], ack == (s.waiting_since ?? 0) { return false }
+        return true
+    }
+
     func statusLight(_ s: SessionState) -> Light {
         let running = (s.agents ?? []).contains { $0.status == "running" }
         switch s.status ?? "idle" {
         case "working":  return .pulse(COLOR_ORANGE)
         case "waiting":
-            if let ack = acknowledgedWaiting[s.session_id], ack == (s.waiting_since ?? 0) { return .solid(COLOR_YELLOW) }
-            return .flash(COLOR_YELLOW, 0)
+            return isUnacknowledgedWaiting(s) ? .flash(COLOR_YELLOW, 0) : .solid(COLOR_YELLOW)
         default:         return running ? .pulse(COLOR_CYAN) : .solid(COLOR_GREEN)
         }
     }
@@ -578,6 +667,11 @@ final class App {
             }
         }
         return f
+    }
+
+    func updateMenuBar() {
+        menuBar.update(connected: pad.connected,
+                       blinking: sessions.contains { isUnacknowledgedWaiting($0) })
     }
 
     private var lastFullRender = Date.distantPast
@@ -768,6 +862,7 @@ final class App {
             self.applyPending()
             self.pruneOptimistic()
             self.render()
+            self.updateMenuBar()
         }
         timer.resume()
 
@@ -784,7 +879,9 @@ final class App {
             src.resume()
             signalSources.append(src)
         }
-        RunLoop.main.run()
+        let nsApp = NSApplication.shared
+        nsApp.setActivationPolicy(.accessory)   // menu bar only: no Dock icon, no app switcher
+        nsApp.run()
     }
 
     private var signalSources: [DispatchSourceSignal] = []

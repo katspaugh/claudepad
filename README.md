@@ -49,6 +49,16 @@ Applying a model/effort **pastes `/model …` or `/effort …` + Enter directly 
 
 Presets, model/effort lists, commands, and colors are editable in `~/.claude/claudepad/config.json` (Launchpad palette indices; hot-reloaded).
 
+## Menu bar
+
+A status item mirrors the pad, for when the Launchpad is out of sight or unplugged:
+
+- **filled grid icon** — Launchpad connected
+- **outlined grid icon** — not connected
+- **blinking** — at least one session is waiting on your input
+
+Blinking uses the same unacknowledged-waiting rule as the flashing session pad, so the two never disagree: press the pad and both go quiet until a newer waiting event arrives. Opening the menu shows the connection state and names the sessions that are waiting.
+
 ## How it works
 
 1. **Hooks** (`hooks/claudepad-hook.sh`, wired into `~/.claude/settings.json` for `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `Pre/PostToolUse`, `SubagentStart/Stop`, `PermissionRequest`, `Notification`, `Stop`) maintain one JSON file per session in `~/.claude/claudepad/state/`.
