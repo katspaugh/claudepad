@@ -4,7 +4,10 @@
 // Only the 8x8 grid is used (no top-row or scene buttons). Columns = sessions:
 //   row 8    session pad, colored by status (orange pulse working / yellow flash
 //            waiting / cyan pulse monitoring / green idle) — press to focus
-//   rows 7-3 running subagents (pulse cyan), compacted — press to attach
+//   rows 7-4 running subagents (pulse cyan), compacted — press to attach
+//   row 3    PR CI status for the session's branch, via gh (green pass / red
+//            fail / blue pulse pending / dim white PR without checks) — press
+//            opens the PR in the browser
 //   row 2    effort pad (effort color) — press cycles effort, applied after a debounce
 //   row 1    preset pad (preset color) — press toggles model+effort presets
 //            (default fable/high ↔ opus/medium), applied after a debounce
@@ -362,6 +365,100 @@ final class Ghostty {
     }
 }
 
+// MARK: - GitHub PR CI status (via gh CLI)
+
+/// Polls `gh pr view` in each session's cwd for the current branch's open PR
+/// and its check rollup. Fetches run on a serial background queue; the cache
+/// is only ever touched from the main thread, which is also where poll() and
+/// the render loop run.
+final class GitHubCI {
+    enum PRStatus: Equatable { case noPR, noChecks, pending, passing, failing }
+    struct Entry { var status: PRStatus; var url: String?; var fetchedAt: Date }
+
+    private(set) var cache: [String: Entry] = [:]   // cwd -> entry
+    private var inFlight: Set<String> = []
+    private let refresh: TimeInterval = 60
+    private let queue = DispatchQueue(label: "claudepad.gh")
+    // The daemon may run as a LaunchAgent with a bare PATH, so resolve gh here.
+    private let ghPath = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
+        .first { FileManager.default.isExecutableFile(atPath: $0) }
+
+    /// Kick off fetches for any cwd whose entry is missing or stale, and drop
+    /// entries for cwds no longer on the board.
+    func poll(cwds: [String]) {
+        guard let gh = ghPath else { return }
+        let live = Set(cwds)
+        let now = Date()
+        for cwd in live {
+            if inFlight.contains(cwd) { continue }
+            if let e = cache[cwd], now.timeIntervalSince(e.fetchedAt) < refresh { continue }
+            inFlight.insert(cwd)
+            queue.async { [weak self] in
+                let entry = GitHubCI.fetch(gh: gh, cwd: cwd)
+                DispatchQueue.main.async {
+                    self?.inFlight.remove(cwd)
+                    self?.cache[cwd] = entry
+                }
+            }
+        }
+        cache = cache.filter { live.contains($0.key) }
+    }
+
+    /// Mark a cwd stale so the next poll refetches, keeping the old status
+    /// visible in the meantime. Called when a session stops working (it may
+    /// have just pushed).
+    func invalidate(cwd: String) {
+        if var e = cache[cwd] {
+            e.fetchedAt = .distantPast
+            cache[cwd] = e
+        }
+    }
+
+    private static func fetch(gh: String, cwd: String) -> Entry {
+        let noPR = Entry(status: .noPR, url: nil, fetchedAt: Date())
+        guard FileManager.default.fileExists(atPath: cwd) else { return noPR }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: gh)
+        p.arguments = ["pr", "view", "--json", "url,statusCheckRollup"]
+        p.currentDirectoryURL = URL(fileURLWithPath: cwd)
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = Pipe()
+        do { try p.run() } catch { return noPR }
+        // Backstop against a hung network call wedging the serial queue.
+        let timeout = DispatchWorkItem { p.terminate() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 15, execute: timeout)
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        timeout.cancel()
+        guard p.terminationStatus == 0,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let url = obj["url"] as? String else { return noPR }
+        let rollup = obj["statusCheckRollup"] as? [[String: Any]] ?? []
+        var failing = false, pending = false
+        for check in rollup {
+            if (check["__typename"] as? String) == "StatusContext" {
+                switch check["state"] as? String ?? "" {
+                case "SUCCESS":             break
+                case "PENDING", "EXPECTED": pending = true
+                default:                    failing = true  // FAILURE, ERROR
+                }
+            } else {  // CheckRun
+                if (check["status"] as? String) != "COMPLETED" { pending = true; continue }
+                switch check["conclusion"] as? String ?? "" {
+                case "SUCCESS", "NEUTRAL", "SKIPPED": break
+                default: failing = true  // FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, …
+                }
+            }
+        }
+        let status: PRStatus = rollup.isEmpty ? .noChecks
+            : failing ? .failing
+            : pending ? .pending
+            : .passing
+        return Entry(status: status, url: url, fetchedAt: Date())
+    }
+}
+
 // MARK: - Menu bar
 
 /// Status item in the macOS menu bar. Mirrors what the pad already shows:
@@ -476,6 +573,8 @@ final class App {
     var acknowledgedWaiting: [String: Double] = [:]
     let menuBar = MenuBar()
     var optimisticEffort: [String: Optimistic] = [:]
+    let ci = GitHubCI()
+    var prevStatus: [String: String] = [:]     // session_id -> last seen status
 
     init() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -557,9 +656,20 @@ final class App {
             result.contains { $0.session_id == id && $0.status == "waiting" && ($0.waiting_since ?? 0) == seen }
         }
 
+        // A session that just stopped working may have pushed — refresh its
+        // branch's CI status early instead of waiting out the poll interval.
+        for s in sessions {
+            if prevStatus[s.session_id] == "working", (s.status ?? "idle") != "working",
+               let cwd = s.cwd {
+                ci.invalidate(cwd: cwd)
+            }
+            prevStatus[s.session_id] = s.status ?? "idle"
+        }
+
         // Stable column assignment: keep existing, new sessions take lowest free column.
         let liveIds = Set(sessions.map { $0.session_id })
         columns = columns.filter { liveIds.contains($0.key) }
+        prevStatus = prevStatus.filter { liveIds.contains($0.key) }
         let used = Set(columns.values)
         var free = (1...8).filter { !used.contains($0) }
         for s in sessions where columns[s.session_id] == nil {
@@ -638,14 +748,27 @@ final class App {
             // flash yellow = waiting, pulse cyan = monitoring, green = idle).
             f[80 + col] = statusLight(s)
 
-            // Rows 7..3: running subagents, newest at the top, compacted —
+            // Rows 7..4: running subagents, newest at the top, compacted —
             // a finished agent frees its slot and the rest shift immediately.
             let running = (s.agents ?? []).filter { $0.status == "running" }
             var row = 7
-            for _ in running.suffix(5) {
-                guard row >= 3 else { break }
+            for _ in running.suffix(4) {
+                guard row >= 4 else { break }
                 f[row * 10 + col] = .pulse(COLOR_CYAN)
                 row -= 1
+            }
+
+            // Row 3: CI status of the branch's PR. Solid red on failure (a
+            // flash would be too distracting for something you can't act on
+            // from the pad); off when there is no PR.
+            if let cwd = s.cwd, let e = ci.cache[cwd] {
+                switch e.status {
+                case .failing:  f[30 + col] = .solid(COLOR_RED)
+                case .pending:  f[30 + col] = .pulse(COLOR_BLUE)
+                case .passing:  f[30 + col] = .solid(COLOR_GREEN)
+                case .noChecks: f[30 + col] = .solid(dim(COLOR_WHITE))
+                case .noPR:     break
+                }
             }
 
             // Row 2: effort. Pending selection pulses; settled value sits dim.
@@ -774,7 +897,14 @@ final class App {
             pendingEffort[col] = Pending(idx: (cur - 1 + n) % n,
                                          deadline: Date().addingTimeInterval(settle))
             render()
-        case 3...7:
+        case 3:
+            // CI pad: open the branch's PR; without one, just focus the session.
+            if let cwd = s.cwd, let url = ci.cache[cwd]?.url, let u = URL(string: url) {
+                NSWorkspace.shared.open(u)
+            } else if let cwd = s.cwd {
+                ghostty.focus(cwd: cwd, needle: needle(for: s))
+            }
+        case 4...7:
             guard let cwd = s.cwd else { return }
             let nd = needle(for: s)
             ghostty.focus(cwd: cwd, needle: nd)
@@ -785,7 +915,7 @@ final class App {
             // the second opens the view (documented behavior).
             // Agent view rows: main first, then agents in spawn order.
             let running = (s.agents ?? []).filter { $0.status == "running" }
-            let shown = min(running.count, 5)
+            let shown = min(running.count, 4)
             let slot = 7 - row
             guard slot < shown else { return }  // empty pad: focus only
             let chrono = running.count - 1 - slot  // newest renders at row 7
@@ -859,6 +989,7 @@ final class App {
             self.loadConfig()
             if !self.pad.connected { self.pad.reconnect() }
             self.scanSessions()
+            self.ci.poll(cwds: self.sessions.compactMap { $0.cwd })
             self.applyPending()
             self.pruneOptimistic()
             self.render()

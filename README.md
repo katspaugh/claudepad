@@ -9,11 +9,11 @@ Zero dependencies: a single Swift daemon (CoreMIDI + AppleScript) fed by Claude 
  row 8  │ ⬤ ││ ⬤ ││ ⬤ ││    ││    ││    ││    ││    │  session/status pads
         ├────┤├────┤├────┤├────┤├────┤├────┤├────┤├────┤
  row 7  │ a1 ││    ││ a1 │                               subagents
- row 6  │ a2 ││    ││    │                               (up to 5,
+ row 6  │ a2 ││    ││    │                               (up to 4,
  row 5  │    ││    ││    │                                newest on top)
  row 4  │    ││    ││    │
- row 3  │    ││    ││    │
         ├────┤├────┤├────┤
+ row 3  │ CI ││ CI ││ CI │                               PR CI status pads
  row 2  │ E  ││ E  ││ E  │                               effort pads
  row 1  │ P  ││ P  ││ P  │                               preset pads
         └────┘└────┘└────┘└────┘└────┘└────┘└────┘└────┘
@@ -29,7 +29,13 @@ Columns are sessions, ordered by start time; a column keeps its position while t
   - 🟡 flashing yellow — waiting for your input / permission
   - 🔵 pulsing cyan — "monitoring": turn idle but subagents still running
   - 🟢 solid green — idle / done
-- **Rows 7–3 — running subagents**, newest at the top, pulsing cyan. The stack stays compact: when an agent finishes, its pad frees and the others shift immediately.
+- **Rows 7–4 — running subagents**, newest at the top, pulsing cyan. The stack stays compact: when an agent finishes, its pad frees and the others shift immediately.
+- **Row 3 — PR CI status** for the session's current branch (via `gh`, polled every 60s and refetched early when a session stops working — it may have just pushed):
+  - 🟢 solid green — checks passing
+  - 🔴 solid red — a check failed (deliberately no flash)
+  - 🔵 pulsing blue — checks running
+  - ⚪ dim white — open PR with no checks
+  - dark — no open PR for the branch (or `gh` missing/unauthenticated)
 - **Row 2 — effort pad**, colored by current effort: max red → xhigh orange → high yellow → medium green → low blue.
 - **Row 1 — preset pad**, colored by the matching model+effort preset (default: Fable/high white, Opus/medium purple; dim white if the session matches no preset).
 
@@ -39,6 +45,7 @@ Columns are sessions, ordered by start time; a column keeps its position while t
 |---|---|
 | session pad | focus that session's Ghostty window or tab; a flashing (waiting) pad goes solid yellow until the next waiting event |
 | subagent pad | focus the session, open the agent view (`←`), and attach to that agent (`↓`…`enter`) |
+| CI pad (row 3) | open the branch's PR in the browser (focus the session if there is no PR) |
 | preset pad (row 1) | toggle to the next model+effort preset — pad pulses through choices, applies **1.2s after your last tap** (pastes `/model …` then `/effort …`) |
 | effort pad (row 2) | step effort **up** (low → … → max, wraps to low), same debounce |
 | any pad in an empty column | scroll `5h X%  7d Y%` rate-limit usage across the grid |
