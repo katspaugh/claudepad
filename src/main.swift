@@ -435,7 +435,15 @@ final class GitHubCI {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let url = obj["url"] as? String else { return noPR }
         let rollup = obj["statusCheckRollup"] as? [[String: Any]] ?? []
+        return Entry(status: classify(rollup: rollup), url: url, fetchedAt: Date())
+    }
+
+    static func classify(rollup: [[String: Any]]) -> PRStatus {
         var failing = false, pending = false
+        // A re-run job leaves its superseded attempts in the rollup (e.g. a
+        // CANCELLED run next to its successful re-run), so keep only the
+        // latest attempt of each check run.
+        var latestRuns: [String: [String: Any]] = [:]
         for check in rollup {
             if (check["__typename"] as? String) == "StatusContext" {
                 switch check["state"] as? String ?? "" {
@@ -444,18 +452,24 @@ final class GitHubCI {
                 default:                    failing = true  // FAILURE, ERROR
                 }
             } else {  // CheckRun
-                if (check["status"] as? String) != "COMPLETED" { pending = true; continue }
-                switch check["conclusion"] as? String ?? "" {
-                case "SUCCESS", "NEUTRAL", "SKIPPED": break
-                default: failing = true  // FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, …
-                }
+                let key = "\(check["workflowName"] as? String ?? "")/\(check["name"] as? String ?? "")"
+                let started = check["startedAt"] as? String ?? ""
+                if let prev = latestRuns[key],
+                   (prev["startedAt"] as? String ?? "") >= started { continue }
+                latestRuns[key] = check
             }
         }
-        let status: PRStatus = rollup.isEmpty ? .noChecks
+        for check in latestRuns.values {
+            if (check["status"] as? String) != "COMPLETED" { pending = true; continue }
+            switch check["conclusion"] as? String ?? "" {
+            case "SUCCESS", "NEUTRAL", "SKIPPED": break
+            default: failing = true  // FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, …
+            }
+        }
+        return rollup.isEmpty ? .noChecks
             : failing ? .failing
             : pending ? .pending
             : .passing
-        return Entry(status: status, url: url, fetchedAt: Date())
     }
 }
 
